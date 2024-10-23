@@ -1,30 +1,65 @@
-# Remove these env vars from the main workflow file
-env:
-  KIT_NAME: vault
-  # Remove these AWS related env vars
-  # AWS_REGION: us-east-1 
-  # AWS_BUCKET: genesis-pipeline
+name: 'Version Manager'
+description: 'Manages semver versioning for Genesis kits'
+author: 'Genesis Community'
 
-# Update the build-kit job to include pushing the version commit
-jobs:
-  build-kit:
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.version.outputs.new_version }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Need full history for tags
-      
-      - id: version
-        uses: ./.github/actions/version-manager
-        with:
-          bump_type: ${{ inputs.version_bump || 'patch' }}
-          
-      - name: Push version change
-        run: |
-          git push origin HEAD
-          git tag "v${{ steps.version.outputs.new_version }}"
-          git push origin "v${{ steps.version.outputs.new_version }}"
-          
-      # Rest of the job remains the same...
+inputs:
+  bump_type:
+    description: 'Type of version bump'
+    required: true
+    default: 'patch'
+
+outputs:
+  new_version:
+    description: 'The new version number'
+    value: ${{ steps.bump.outputs.new_version }}
+  previous_version:
+    description: 'The previous version number'
+    value: ${{ steps.bump.outputs.previous_version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Get current version
+      id: current
+      shell: bash
+      run: |
+        if [[ -f version ]]; then
+          version=$(cat version | grep -oP '(?<=Version: ).*' || echo "0.0.0")
+          echo "current_version=$version" >> $GITHUB_OUTPUT
+        else
+          echo "current_version=0.0.0" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Bump version
+      id: bump
+      shell: bash
+      run: |
+        current="${{ steps.current.outputs.current_version }}"
+        
+        # Extract version components
+        major=$(echo "$current" | cut -d. -f1)
+        minor=$(echo "$current" | cut -d. -f2)
+        patch=$(echo "$current" | cut -d. -f3)
+        
+        # Bump version according to type
+        case "${{ inputs.bump_type }}" in
+          major)
+            major=$((major + 1))
+            minor=0
+            patch=0
+            ;;
+          minor)
+            minor=$((minor + 1))
+            patch=0
+            ;;
+          patch)
+            patch=$((patch + 1))
+            ;;
+        esac
+        
+        new_version="${major}.${minor}.${patch}"
+        echo "new_version=${new_version}" >> $GITHUB_OUTPUT
+        echo "previous_version=$current" >> $GITHUB_OUTPUT
+        
+        # Update version file
+        echo "## Version: ${new_version}" > version
