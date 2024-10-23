@@ -1,0 +1,190 @@
+name: Release Pipeline
+
+on:
+  push:
+    branches: [develop, main]
+    paths-ignore: ['ci/**']
+  pull_request:
+    branches: [develop]
+    paths-ignore: ['ci/**']
+  workflow_dispatch:
+    inputs:
+      version_bump:
+        description: 'Version bump type'
+        required: false
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: 'patch'
+
+env:
+  KIT_NAME: vault # From meta.kit in settings.yml
+  AWS_REGION: us-east-1
+  AWS_BUCKET: genesis-pipeline
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  build-kit:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.new_version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        uses: ./.github/actions/version-manager
+        with:
+          bump_type: ${{ inputs.version_bump || 'patch' }}
+          
+      - name: Build Kit
+        env:
+          GENESIS_SECRETS_BASE: ${{ secrets.SECRETS_BASE }}
+          GENESIS_SECRETS_TOKEN: ${{ secrets.SECRETS_TOKEN }}
+          GENESIS_SECRETS_KEY: ${{ secrets.SECRETS_KEY }}
+          BOSH_CLIENT: ${{ secrets.BOSH_CLIENT }}
+          BOSH_CLIENT_SECRET: ${{ secrets.BOSH_CLIENT_SECRET }}
+          BOSH_ENVIRONMENT: ${{ secrets.BOSH_ENVIRONMENT }}
+          BOSH_CA_CERT: ${{ secrets.BOSH_CA_CERT }}
+        run: |
+          VERSION="${{ steps.version.outputs.new_version }}"
+          genesis compile-kit -v "$VERSION" -n "${{ env.KIT_NAME }}"
+          
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kit-build
+          path: ${{ env.KIT_NAME }}-${{ steps.version.outputs.new_version }}.tar.gz
+
+  spec-tests:
+    needs: [build-kit]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: kit-build
+          
+      - name: Run Spec Tests
+        env:
+          GENESIS_SECRETS_BASE: ${{ secrets.SECRETS_BASE }}
+          GENESIS_SECRETS_TOKEN: ${{ secrets.SECRETS_TOKEN }}
+          GENESIS_SECRETS_KEY: ${{ secrets.SECRETS_KEY }}
+        run: |
+          cd spec
+          ginkgo -p .
+
+  spec-check:
+    needs: [build-kit]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: kit-build
+          
+      - name: Check Specs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./ci/scripts/compare-release-specs "${{ github.event.before }}"
+          
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spec-diffs
+          path: spec-check/diff-*
+
+  deploy:
+    needs: [spec-tests, spec-check]
+    runs-on: ubuntu-latest
+    environment: ci-testing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: kit-build
+          
+      - name: Set up Infrastructure
+        uses: ./.github/actions/setup-infra
+        with:
+          iaas: vsphere # From meta.iaas in settings.yml
+          
+      - name: Deploy and Test
+        env:
+          DEPLOY_ENV: ci-vsphere-baseline
+          GENESIS_SECRETS_BASE: ${{ secrets.SECRETS_BASE }}
+          GENESIS_SECRETS_TOKEN: ${{ secrets.SECRETS_TOKEN }}
+          GENESIS_SECRETS_KEY: ${{ secrets.SECRETS_KEY }}
+          BOSH_CLIENT: ${{ secrets.BOSH_CLIENT }}
+          BOSH_CLIENT_SECRET: ${{ secrets.BOSH_CLIENT_SECRET }}
+          BOSH_ENVIRONMENT: ${{ secrets.BOSH_ENVIRONMENT }}
+          BOSH_CA_CERT: ${{ secrets.BOSH_CA_CERT }}
+          SECRETS_SEED_DATA: ${{ secrets.SECRETS_SEED_DATA }}
+        run: |
+          ./ci/scripts/test-deployment
+
+  prepare-release:
+    if: github.ref == 'refs/heads/develop' && github.event_name != 'pull_request'
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: spec-diffs
+          
+      - name: Generate Release Notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./ci/scripts/generate-release-notes \
+            "${{ needs.build-kit.outputs.version }}" \
+            "$(pwd)" \
+            "${{ github.workspace }}/previous-tag" \
+            "release-notes.md"
+            
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: release/${{ needs.build-kit.outputs.version }}
+          title: Release v${{ needs.build-kit.outputs.version }}
+          body: |
+            Release preparation for version ${{ needs.build-kit.outputs.version }}
+            
+            Generated release notes and spec diffs attached.
+          labels: release
+          base: main
+
+  release:
+    if: github.ref == 'refs/heads/main'
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: kit-build
+          
+      - name: Create Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ needs.build-kit.outputs.version }}
+          name: v${{ needs.build-kit.outputs.version }}
+          body_path: release-notes/release-notes.md
+          files: |
+            *.tar.gz
+            spec-check/diff-*
+          prerelease: false
+          
+      - name: Notify Success
+        if: success()
+        uses: ./.github/actions/notify
+        with:
+          message: "Successfully released v${{ needs.build-kit.outputs.version }}"
+          status: success

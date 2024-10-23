@@ -1,0 +1,59 @@
+name: Version Manager
+description: Manages semver versioning for the kit
+
+inputs:
+  bump_type:
+    description: 'Type of version bump (major, minor, patch)'
+    required: true
+    default: 'patch'
+
+outputs:
+  new_version:
+    description: 'The new version number'
+    value: ${{ steps.bump.outputs.new_version }}
+  previous_version:
+    description: 'The previous version number'
+    value: ${{ steps.bump.outputs.previous_version }}
+
+runs:
+  using: composite
+  steps:
+    - id: current
+      shell: bash
+      run: |
+        if [[ -f version ]]; then
+          echo "current_version=$(cat version | grep -oP '(?<=Version: ).*')" >> $GITHUB_OUTPUT
+        else
+          echo "current_version=0.0.0" >> $GITHUB_OUTPUT
+        fi
+
+    - id: bump
+      shell: bash
+      run: |
+        current="${{ steps.current.outputs.current_version }}"
+        
+        # Semver components
+        major=$(echo $current | cut -d. -f1)
+        minor=$(echo $current | cut -d. -f2)
+        patch=$(echo $current | cut -d. -f3)
+        
+        case "${{ inputs.bump_type }}" in
+          major)
+            major=$((major + 1))
+            minor=0
+            patch=0
+            ;;
+          minor)
+            minor=$((minor + 1))
+            patch=0
+            ;;
+          patch)
+            patch=$((patch + 1))
+            ;;
+        esac
+        
+        new_version="${major}.${minor}.${patch}"
+        echo "new_version=${new_version}" >> $GITHUB_OUTPUT
+        echo "previous_version=$current" >> $GITHUB_OUTPUT
+        
+        echo "## Version: ${new_version}" > version
