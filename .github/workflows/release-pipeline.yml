@@ -62,13 +62,16 @@ jobs:
           wget https://github.com/geofffranks/spruce/releases/download/v1.31.1/spruce-linux-amd64
           wget https://github.com/egen/safe/releases/download/v1.8.0/safe-linux-amd64
           wget https://github.com/cloudfoundry/credhub-cli/releases/download/2.9.41/credhub-linux-amd64-2.9.41.tgz
+          wget https://github.com/cloudfoundry/bosh-cli/releases/download/v7.8.6/bosh-cli-7.8.6-linux-amd64
 
           tar -xvf credhub-linux-amd64-2.9.41.tgz
 
+          sudo mv ./bosh-cli-7.8.6-linux-amd64 /bin/bosh
           sudo mv ./credhub /bin/credhub
           sudo mv ./safe-linux-amd64 /bin/safe
           sudo mv ./spruce-linux-amd64 /bin/spruce
 
+          chmod u+x /bin/bosh
           chmod u+x /bin/credhub
           chmod u+x /bin/safe
           chmod u+x /bin/spruce
