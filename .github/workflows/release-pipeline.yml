@@ -65,7 +65,7 @@ jobs:
 
           tar -xvf credhub-linux-amd64-2.9.41.tgz
 
-          sudo mv ./credhub-linux-amd64-2.9.41 /bin/credhub
+          sudo mv ./credhub /bin/credhub
           sudo mv ./safe-linux-amd64 /bin/safe
           sudo mv ./spruce-linux-amd64 /bin/spruce
 
