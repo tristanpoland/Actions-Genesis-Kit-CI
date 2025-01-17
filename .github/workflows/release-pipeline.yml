@@ -58,8 +58,9 @@ jobs:
           BOSH_ENVIRONMENT: ${{ secrets.BOSH_ENVIRONMENT }}
           BOSH_CA_CERT: ${{ secrets.BOSH_CA_CERT }}
         run: |
+          wget https://github.com/genesis-community/genesis/releases/download/v3.0.13/genesis
           VERSION="${{ steps.version.outputs.new_version }}"
-          genesis compile-kit -v "$VERSION" -n "${{ env.KIT_NAME }}"
+          ./genesis compile-kit -v "$VERSION" -n "${{ env.KIT_NAME }}"
           
       - uses: actions/upload-artifact@v4
         with:
